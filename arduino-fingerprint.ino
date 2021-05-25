@@ -12,7 +12,6 @@ bool ledState = false;
 bool relayState = false;
 bool sensorInitialized = false;
 bool matchedFingerprint = false;
-bool placedFingerprint = false;
 bool enrollStage2 = false;
 
 uint8_t stage = 0;
@@ -38,8 +37,8 @@ static const struct SESSION {
 
 static const struct STAGE {
   static const uint8_t ACTIVATE = 1;
-  static const uint8_t ENROLL = 4;
-  static const uint8_t EMPTY = 15;
+  static const uint8_t ENROLL = 5;
+  static const uint8_t EMPTY = 10;
 } STAGE;
 
 
@@ -57,33 +56,11 @@ void setup() {
 
   if (!sensorInitialized) {
     Serial.println("Sensor is unavailable");
-
   } else {
-    
     Serial.println("Sensor ready");
-
-    finger.getParameters();
-    fingerprintCapacity = finger.capacity;
-    Serial.print("Fingerprint capacity: "); Serial.println(fingerprintCapacity);
-
-    finger.getTemplateCount();
-    fingerprintCount = finger.templateCount;
-    Serial.print("Template count: "); Serial.println(fingerprintCount);
-
-    for (uint8_t id = 1; id <= fingerprintCapacity; id++) {
-      Serial.print("Getting fingerprint id #"); Serial.println(id);
-      uint8_t f = finger.loadModel(id);
-      Serial.print("ID result: "); Serial.println(f);
-
-      if (f != FINGERPRINT_OK) {
-        nextId = id;
-        break;
-      }
-    }
-    
   }
   
-  Serial.println("Ready!");
+  Serial.println("Program ready!");
   session = SESSION.READY;
 }
 
@@ -123,8 +100,8 @@ void loop() {
           digitalWrite(LED_BUILTIN, ledState);
         }
 
-        if (matchedFingerprint && !ledState) {
-          ledState = true;
+        else if (matchedFingerprint && ledState) {
+          ledState = false;
           digitalWrite(LED_BUILTIN, ledState);
         }
 
@@ -156,7 +133,6 @@ void loop() {
       case SESSION.ENROLL:
         enrollTimeout++;
         if (enrollTimeout >= ENROLL_TIMEOUT) {
-          Serial.println("Enroll timeout");
           enrollTimeout = 0;
           enrollStage2 = false;
           session = SESSION.READY;
@@ -187,26 +163,23 @@ void loop() {
         } else if (stage >= STAGE.ENROLL) {
           Serial.println("Enroll fingerprint");
           Serial.print("ID #"); Serial.println(nextId);
+          Serial.print("Waiting for valid finger to enroll as #"); Serial.println(nextId);
           ledState = false;
           digitalWrite(LED_BUILTIN, ledState);
-          Serial.print("Waiting for valid finger to enroll as #"); Serial.println(nextId);
           session = SESSION.ENROLL;
           
         } else if (stage >= STAGE.ACTIVATE) {
           relayState = !relayState;
           digitalWrite(RELAY_PIN, relayState);
+          
           if (relayState) {
             ledState = true;
-            digitalWrite(LED_BUILTIN, ledState);
-            Serial.println("Relay activated");
-            
-          } else {
-            Serial.println("Relay deactivated");
-          } 
+            digitalWrite(LED_BUILTIN, ledState); 
+          }
+          Serial.println(relayState ? "Relay activated" : "Relay deactivated");
 
         } else {
           Serial.print("Invalid stage");
-
         }
 
         stage = 0;
@@ -221,82 +194,66 @@ void loop() {
 }
 
 void listenToFingerprint() {
+
   uint8_t p = finger.getImage();
+  if (p != FINGERPRINT_OK) {
+    return;
+  }
+
+
+  Serial.println("Placed a finger");
   
-  switch (p) {
-    case FINGERPRINT_OK:
-      Serial.println("Image taken");
-      if (matchedFingerprint) {
-        stage++;
-        // ledState = false;
-        // digitalWrite(LED_BUILTIN, ledState);
-      }
-      break;
-    case FINGERPRINT_NOFINGER:
-//      Serial.println("No finger detected");
-      return;
-    case FINGERPRINT_PACKETRECIEVEERR:
-      Serial.println("Communication error");
-      return;
-    case FINGERPRINT_IMAGEFAIL:
-      Serial.println("Imaging error");
-      return;
-    default:
-      Serial.println("Unknown error");
-      return;
+  if (matchedFingerprint) {
+    stage++;
+    Serial.print("Stage "); Serial.println(stage);
+    // ledState = relayState ? false : true;
+    // digitalWrite(LED_BUILTIN, ledState);
+    ledState = true;
+    digitalWrite(LED_BUILTIN, ledState);
   }
 
   // OK success!
-
   p = finger.image2Tz();
-  switch (p) {
-    case FINGERPRINT_OK:
-      // Serial.println("Image converted");
-      break;
-    case FINGERPRINT_IMAGEMESS:
-      Serial.println("Image too messy");
-      return;
-    case FINGERPRINT_PACKETRECIEVEERR:
-      Serial.println("Communication error");
-      return;
-    case FINGERPRINT_FEATUREFAIL:
-      Serial.println("Could not find fingerprint features");
-      return;
-    case FINGERPRINT_INVALIDIMAGE:
-      Serial.println("Could not find fingerprint features");
-      return;
-    default:
-      Serial.println("Unknown error");
-      return;
+
+  if (p != FINGERPRINT_OK) {
+    Serial.print("Convert fingerprint error: "); Serial.println(p);
+    return;
   }
+
+  
 
   // OK converted!
   p = finger.fingerSearch();
-  if (p == FINGERPRINT_OK) {
-    // Serial.println("Found a print match!");
-  } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
-    Serial.println("Communication error");
-    return;
-  } else if (p == FINGERPRINT_NOTFOUND) {
-    Serial.println("Did not find a match");
-    return;
-  } else {
-    Serial.println("Unknown error");
+
+  if (p != FINGERPRINT_OK) {
+    if (p == FINGERPRINT_NOTFOUND) {
+      Serial.println("Fingerprint no match found!");
+    } else {
+      Serial.print("Search fingerprint error: "); Serial.println(p);
+    }
     return;
   }
 
   // found a match!
-  Serial.print("Found ID #"); Serial.print(finger.fingerID);
-  Serial.print(" with confidence of "); Serial.println(finger.confidence);
+  Serial.print("Found ID: "); Serial.print(finger.fingerID); Serial.print(" confidence: "); Serial.println(finger.confidence);
 
   if (relayState) {
     relayState = false;
     digitalWrite(RELAY_PIN, relayState);
   } else {
-    stage++;
-    ledState = true;
-    digitalWrite(LED_BUILTIN, ledState);
-    matchedFingerprint = true;
+
+    if (!matchedFingerprint) {
+      stage = 1;
+      Serial.println("Add 1st stage");
+      ledState = false;
+      digitalWrite(LED_BUILTIN, ledState);
+      delay(500);
+      ledState = true;
+      digitalWrite(LED_BUILTIN, ledState);
+      delay(500);
+      matchedFingerprint = true;
+    }
+    
   }
   
   return;// finger.fingerID;
@@ -389,4 +346,25 @@ void enrollFingerprint2() {
   session = SESSION.READY;
   enrollStage2 = false;
   return;
+}
+
+void getEnrollId() {
+  finger.getParameters();
+    fingerprintCapacity = finger.capacity;
+    Serial.print("Fingerprint capacity: "); Serial.println(fingerprintCapacity);
+
+    finger.getTemplateCount();
+    fingerprintCount = finger.templateCount;
+    Serial.print("Template count: "); Serial.println(fingerprintCount);
+
+    for (uint8_t id = 1; id <= fingerprintCapacity; id++) {
+      Serial.print("Getting fingerprint id #"); Serial.println(id);
+      uint8_t f = finger.loadModel(id);
+      Serial.print("ID result: "); Serial.println(f);
+
+      if (f != FINGERPRINT_OK) {
+        nextId = id;
+        break;
+      }
+    }
 }
